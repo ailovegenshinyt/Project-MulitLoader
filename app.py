@@ -1,5 +1,5 @@
 import os, time, shutil, threading, uuid, re, json, traceback
-import subprocess
+import subprocess, random, requests
 import yt_dlp
 from flask import Flask, request, jsonify, send_file, Response
 
@@ -9,6 +9,28 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+# ── Proxy / IP Rotation System ───────────────────────────────────────────────
+PROXY_LIST = []
+
+def refresh_proxies():
+    global PROXY_LIST
+    try:
+        url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=all"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            lines = res.text.strip().split('\n')
+            PROXY_LIST = [f"http://{p.strip()}" for p in lines if p.strip()]
+            print(f"✅ Loaded {len(PROXY_LIST)} proxies for IP Rotation.")
+    except Exception as e:
+        print(f"⚠️ Proxy fetch failed: {e}")
+
+def get_random_proxy():
+    if not PROXY_LIST:
+        refresh_proxies()
+    if PROXY_LIST:
+        return random.choice(PROXY_LIST)
+    return None
 
 # ── Spotify API setup (For spotdl performance) ───────────────────────────────
 _cid = os.environ.get('SPOTIFY_CLIENT_ID', '')
@@ -58,8 +80,16 @@ def start_download():
 
     def run(task_id, url, fmt, quality):
         task = tasks[task_id]
+        proxy = get_random_proxy()
+        env = os.environ.copy()
         try:
             task['logs'].append("Connecting to MultiLoader Engine....... Done")
+            if proxy:
+                task['logs'].append(f"🔄 [IP Rotation] Active: {proxy}")
+                env['HTTP_PROXY'] = proxy
+                env['HTTPS_PROXY'] = proxy
+            else:
+                task['logs'].append("⚠️ Running direct connection (No proxy).")
 
             # ── Spotify path ─────────────────────────────────────────────────
             if 'spotify.com' in url:
@@ -69,7 +99,7 @@ def start_download():
                 os.makedirs(temp_dir, exist_ok=True)
                 ext = 'mp3' if fmt == 'audio' else 'wav'
                 cmd = ['spotdl', 'download', url, '--output', f'{temp_dir}/', '--format', ext]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
                 track_num = 0
                 for line in proc.stdout:
                     line = line.strip()
@@ -112,9 +142,9 @@ def start_download():
                     'nocheckcertificate': True, 
                     'cache_dir': False,
                     'legacy_server_connect': True, 
-                    'retries': 15,                 # เพิ่มความอึด
+                    'retries': 15,                 
                     'fragment_retries': 15,
-                    'socket_timeout': 30,          # รอสายได้นานขึ้น
+                    'socket_timeout': 30,          
                     'http_client': 'urllib',
                     'extractor_args': {
                         'youtube': {
@@ -123,6 +153,9 @@ def start_download():
                     },
                     'youtube_include_dash_manifest': False,
                 }
+                
+                if proxy:
+                    ydl_opts['proxy'] = proxy
 
                 if fmt == 'video':
                     res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
