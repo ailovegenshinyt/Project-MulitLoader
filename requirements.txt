@@ -1,0 +1,6 @@
+yt-dlp
+spotdl
+flask
+flask-cors
+spotipy
+python-dotenv
