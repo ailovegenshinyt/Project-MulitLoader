@@ -28,14 +28,14 @@ tasks = {}
 # ── Background cleanup (ทุกๆ 5 นาที) ──────────────────────────────────────────
 def background_cleanup():
     while True:
-        time.sleep(300) # 5 นาที
+        time.sleep(3600) # 60 นาที (1 ชั่วโมง)
         t = time.time()
         for root, dirs, files in os.walk(DOWNLOAD_FOLDER, topdown=False):
             for f in files:
                 fp = os.path.join(root, f)
                 try:
-                    # ลบไฟล์ที่เก่ากว่า 5 นาที
-                    if os.path.getmtime(fp) < t - 300: os.unlink(fp)
+                    # ลบไฟล์ที่เก่ากว่า 1 ชั่วโมง
+                    if os.path.getmtime(fp) < t - 3600: os.unlink(fp)
                 except: pass
             for d in dirs:
                 dp = os.path.join(root, d)
@@ -111,93 +111,35 @@ def start_download():
             # ── Core Download Engine (yt-dlp) ────────────────────────────────────────
             task['logs'].append("Warming up Core Engine...")
 
+            last_p = -10
+            def progress_hook(d):
+                nonlocal last_p
+                if d['status'] == 'downloading':
+                    try:
+                        p_str = d.get('_percent_str', '0.0%')
+                        clean_p = re.sub(r'\x1b\[[0-9;]*m', '', p_str).replace('%', '').strip()
+                        p = float(clean_p)
+                        if p - last_p >= 5 or p >= 100:
+                            s = d.get('_speed_str', '0.00KiB/s')
+                            clean_s = re.sub(r'\x1b\[[0-9;]*m', '', s).strip()
+                            task['logs'].append(f"Downloading... {p:.1f}% (Speed: {clean_s})")
+                            last_p = p
+                    except Exception:
+                        pass
+                elif d['status'] == 'finished':
+                    task['logs'].append("Download complete, merging files...")
+
             def pp_hook(d):
                 if d['status'] == 'started':
                     task['logs'].append(f"Stage: {d['postprocessor']} started...")
                 elif d['status'] == 'finished':
                     task['logs'].append(f"Stage: {d['postprocessor']} completed.")
 
-            # ── 🛠️ ระบบดาวน์โหลดใหม่ (Cobalt Multi-Instance) ──────────────────
-            def download_via_cobalt(target_url, is_audio=True):
-                # รายชื่อ Instance ของ Cobalt ที่เสถียร
-                instances = [
-                    "https://api.cobalt.tools/api/json",
-                    "https://cobalt.sh/api/json",
-                    "https://api.cobalt.best/api/json"
-                ]
-                
-                headers = {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                }
-
-                for api_url in instances:
-                    task['logs'].append(f"Cobalt: Trying instance {api_url.split('/')[2]}...")
-                    print(f"DEBUG: Trying Cobalt instance {api_url} for {target_url}")
-                    try:
-                        data = {"url": target_url, "isAudioOnly": is_audio}
-                        res = requests.post(api_url, json=data, headers=headers, timeout=20)
-                        
-                        if res.status_code == 200:
-                            res_json = res.json()
-                            status = res_json.get('status')
-                            
-                            if status in ['stream', 'redirect', 'tunnel']:
-                                stream_url = res_json.get('url')
-                                task['logs'].append("Success! Pulling stream...")
-                                
-                                f_res = requests.get(stream_url, stream=True, timeout=120)
-                                if f_res.status_code == 200:
-                                    ext = 'mp3' if is_audio else 'mp4'
-                                    filename = f"dl_{int(time.time())}_{uuid.uuid4().hex[:4]}.{ext}"
-                                    f_path = os.path.join(DOWNLOAD_FOLDER, filename)
-                                    
-                                    with open(f_path, 'wb') as f:
-                                        for chunk in f_res.iter_content(chunk_size=16384):
-                                            f.write(chunk)
-                                    
-                                    task['filename'] = filename
-                                    task['download_url'] = f"/files/{filename}"
-                                    task['status'] = 'completed'
-                                    task['logs'].append(f"Download complete: {filename}")
-                                    return True
-                        
-                        print(f"DEBUG: Cobalt {api_url} returned status {res.status_code}")
-                        task['logs'].append(f"Cobalt {api_url.split('/')[2]} failed with status {res.status_code}")
-                    except Exception as e:
-                        print(f"DEBUG: Cobalt {api_url} Error: {str(e)}")
-                        task['logs'].append(f"Cobalt {api_url.split('/')[2]} error: {str(e)[:50]}")
-                
-                return False
-
             # --- เริ่มต้นกระบวนการ ---
+            # 🔎 ถ้าเป็น Spotify หรือค้นหา ให้หา URL YouTube มาก่อน
             final_yt_url = url
-            # ถ้าเป็น Spotify หรือคำค้นหา ให้หา URL YouTube มาก่อน
             if 'spotify.com' in url or url.startswith('ytsearch'):
                 task['logs'].append("Searching for YouTube source...")
-                search_opts = {'quiet': True, 'extract_flat': True, 'nocheckcertificate': True}
-                with yt_dlp.YoutubeDL(search_opts) as ydl:
-                    try:
-                        search_info = ydl.extract_info(url, download=False)
-                        if 'entries' in search_info and search_info['entries']:
-                            final_yt_url = search_info['entries'][0]['url']
-                        else:
-                            final_yt_url = search_info.get('webpage_url', url)
-                    except Exception as e:
-                        task['logs'].append(f"Search Warning: {e}")
-
-            # 🚀 ขั้นตอนที่ 1: ลองส่งให้ Cobalt จัดการก่อน (Cobalt รองรับทั้ง YT และ Spotify ตรงๆ)
-            task['logs'].append(f"Primary Engine: Testing Cobalt for {url[:30]}...")
-            if download_via_cobalt(url, is_audio=(fmt == 'audio')):
-                task['logs'].append("Cobalt Engine: Success!")
-                return 
-
-            # 🔎 ขั้นตอนที่ 2: ถ้า Cobalt วืด และเป็น Spotify/Search ให้หา URL YouTube มาก่อน
-            final_yt_url = url
-            if 'spotify.com' in url or url.startswith('ytsearch'):
-                task['logs'].append("Secondary Engine: Searching for YouTube source...")
-                # ใช้ config ที่คลีนที่สุดเพื่อเลี่ยงการ Crash
                 search_opts = {
                     'quiet': True, 
                     'extract_flat': True, 
@@ -216,13 +158,8 @@ def start_download():
                     except Exception as e:
                         task['logs'].append(f"Search Warning: {str(e)[:100]}")
 
-            # 🚀 ขั้นตอนที่ 3: ลอง Cobalt อีกครั้งด้วย URL YouTube ที่หามาได้
-            if final_yt_url != url:
-                if download_via_cobalt(final_yt_url, is_audio=(fmt == 'audio')):
-                    return
-
-            # 🛡️ ขั้นตอนที่ 4: ไม้ตายสุดท้าย Fallback ไปที่ Core Engine (แบบ Basic)
-            task['logs'].append("Fallback Engine: Core Engine starting (Basic Mode)...")
+            # 🛡️ ขั้นตอนสุดท้าย: ดาวน์โหลดด้วย Core Engine (Urllib3 Downgrade Mode)
+            task['logs'].append("Core Engine starting...")
             temp_dir = os.path.join(os.path.abspath(DOWNLOAD_FOLDER), f"fallback_{uuid.uuid4().hex[:6]}")
             os.makedirs(temp_dir, exist_ok=True)
             
@@ -231,9 +168,11 @@ def start_download():
                 'legacy_server_connect': True,
                 'source_address': '0.0.0.0',
                 'cache_dir': False,
-                'quiet': False,
+                'quiet': True,
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                 'format': 'bestaudio/best' if fmt == 'audio' else 'bestvideo+bestaudio/best',
+                'progress_hooks': [progress_hook],
+                'postprocessor_hooks': [pp_hook],
             }
             if fmt != 'video':
                 ydl_opts['postprocessors'] = [{

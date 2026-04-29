@@ -19,7 +19,7 @@ MultiLoader is a high-performance video and music downloader that supports YouTu
 - 🔍 Spotify Search by song/artist name
 - 📱 iOS/iPadOS native download support
 - 🏷️ Auto metadata & thumbnail embedding
-- 🧹 Auto cache cleanup every 5 minutes
+- 🧹 Auto cache cleanup every 1 hour
 
 ## Supported Formats
 - Video: MP4 (4K, 1080p, 720p, 480p)
