@@ -118,8 +118,7 @@ def start_download():
                     'http_client': 'urllib',
                     'extractor_args': {
                         'youtube': {
-                            'player_client': ['web_embedded'],
-                            'player_skip': ['webpage', 'configs']
+                            'player_client': ['ios', 'android'],
                         }
                     },
                     'youtube_include_dash_manifest': False,
