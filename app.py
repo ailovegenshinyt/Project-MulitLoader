@@ -117,70 +117,93 @@ def start_download():
                 elif d['status'] == 'finished':
                     task['logs'].append(f"Stage: {d['postprocessor']} completed.")
 
-            # --- ระบบดาวน์โหลด (Hugging Face / SSL Bypass Mode) ---
-            abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
-            temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-            temp_dir = os.path.join(abs_download_path, temp_dir_name)
+            # ── 🛠️ ระบบดาวน์โหลดใหม่ (Cobalt + yt-dlp Hybrid) ──────────────────
+            def download_via_cobalt(target_url, is_audio=True):
+                task['logs'].append(f"Cobalt Engine: Requesting stream...")
+                try:
+                    c_headers = {"Accept": "application/json", "Content-Type": "application/json"}
+                    c_data = {"url": target_url, "isAudioOnly": is_audio, "downloadMode": "auto"}
+                    c_res = requests.post("https://api.cobalt.tools/api/json", json=c_data, headers=c_headers, timeout=30)
+                    
+                    if c_res.status_code == 200:
+                        res_json = c_res.json()
+                        if res_json.get('status') == 'stream' or res_json.get('status') == 'redirect':
+                            stream_url = res_json.get('url')
+                            task['logs'].append("Stream link acquired! Pulling media...")
+                            
+                            # ดึงไฟล์จาก Cobalt มาเก็บที่เครื่อง
+                            f_res = requests.get(stream_url, stream=True, timeout=120)
+                            if f_res.status_code == 200:
+                                # พยายามดึงชื่อไฟล์จาก Header หรือตั้งชื่อใหม่
+                                filename = f"Downloaded_{int(time.time())}.{'mp3' if is_audio else 'mp4'}"
+                                f_path = os.path.join(DOWNLOAD_FOLDER, filename)
+                                
+                                with open(f_path, 'wb') as f:
+                                    for chunk in f_res.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                                
+                                task['filename'] = filename
+                                task['download_url'] = f"/files/{filename}"
+                                task['logs'].append(f"Success: {filename}")
+                                task['status'] = 'completed'
+                                return True
+                    task['logs'].append(f"Cobalt Status: {c_res.status_code} - {c_res.text[:100]}")
+                except Exception as e:
+                    task['logs'].append(f"Cobalt Error: {str(e)}")
+                return False
+
+            # --- เริ่มต้นกระบวนการ ---
+            final_yt_url = url
+            # ถ้าเป็น Spotify หรือคำค้นหา ให้หา URL YouTube มาก่อน
+            if 'spotify.com' in url or url.startswith('ytsearch'):
+                task['logs'].append("Searching for YouTube source...")
+                search_opts = {'quiet': True, 'extract_flat': True, 'nocheckcertificate': True}
+                with yt_dlp.YoutubeDL(search_opts) as ydl:
+                    try:
+                        search_info = ydl.extract_info(url, download=False)
+                        if 'entries' in search_info and search_info['entries']:
+                            final_yt_url = search_info['entries'][0]['url']
+                        else:
+                            final_yt_url = search_info.get('webpage_url', url)
+                    except Exception as e:
+                        task['logs'].append(f"Search Warning: {e}")
+
+            # 🚀 ลองใช้ Cobalt ก่อน (เพราะมันเทพบน Server)
+            if download_via_cobalt(final_yt_url, is_audio=(fmt == 'audio')):
+                return # จบงานถ้า Cobalt สำเร็จ
+
+            # 🛡️ ถ้า Cobalt วืด ค่อยกลับมาใช้ yt-dlp (แบบธรรมดา)
+            task['logs'].append("Cobalt failed. Falling back to Core Engine...")
+            temp_dir = os.path.join(os.path.abspath(DOWNLOAD_FOLDER), f"fallback_{uuid.uuid4().hex[:6]}")
             os.makedirs(temp_dir, exist_ok=True)
             
-            br_qual = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
             ydl_opts = {
                 'nocheckcertificate': True, 
                 'legacy_server_connect': True,
-                'impersonate': 'chrome',       # ใช้ curl_cffi ปลอมเป็น Chrome (ตอนนี้ลง dependencies แบบ Force Update แล้ว)
-                'source_address': '0.0.0.0',   # บังคับ IPv4
+                'source_address': '0.0.0.0',
                 'cache_dir': False,
-                'retries': 5,
-                'socket_timeout': 30,
                 'quiet': False,
-                'no_warnings': False,
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['web', 'android'],
-                    }
-                }
+                'format': 'bestvideo+bestaudio/best' if fmt == 'video' else 'bestaudio/best',
             }
+            if fmt != 'video':
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3' if fmt == 'audio' else 'wav',
+                    'preferredquality': '320',
+                }]
 
-            if fmt == 'video':
-                v_res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
-                ydl_opts['format'] = f'bestvideo[height<={v_res}]+bestaudio/best'
-                ydl_opts['postprocessors'] = [{'key':'FFmpegMetadata'},{'key':'EmbedThumbnail'}]
-            else:
-                ext = 'mp3' if fmt == 'audio' else 'wav'
-                ydl_opts['format'] = 'bestaudio/best'
-                ydl_opts['postprocessors'] = [
-                    {'key':'FFmpegExtractAudio','preferredcodec':ext,'preferredquality':br_qual},
-                    {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
-                ]
-
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    task['logs'].append("Starting media engine... (Check terminal for details)")
-                    info = ydl.extract_info(url, download=True)
-                    
-                    entries = info.get('entries', [])
-                    all_found = os.listdir(temp_dir)
-                    task['logs'].append(f"Debug: Files in temp: {all_found}")
-
-                    if len(entries) > 1 or (not entries and 'playlist' in url):
-                        # กรณี Playlist
-                        title = info.get('title', 'Playlist')
-                        task['logs'].append(f"Zipping Playlist: {title}")
-                        zip_name = f"Playlist_{int(time.time())}"
-                        shutil.make_archive(os.path.join(abs_download_path, zip_name), 'zip', temp_dir)
-                        task['filename'] = f"{zip_name}.zip"
-                        task['download_url'] = f"/files/{zip_name}.zip"
-                    else:
-                        # กรณีไฟล์เดียว
-                        if all_found:
-                            # เลือกไฟล์ที่ขนาดใหญ่ที่สุด (มักจะเป็นไฟล์เพลงที่แปลงเสร็จแล้ว)
-                            final_filename = max(all_found, key=lambda f: os.path.getsize(os.path.join(temp_dir, f)))
-                            shutil.move(os.path.join(temp_dir, final_filename), os.path.join(abs_download_path, final_filename))
-                            task['filename'] = final_filename
-                            task['download_url'] = f"/files/{final_filename}"
-                            task['logs'].append(f"Success: {final_filename}")
-                        else:
-                            raise Exception(f"Processor finished but {temp_dir} is empty! Check Terminal.")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(final_yt_url, download=True)
+                all_found = os.listdir(temp_dir)
+                if all_found:
+                    final_filename = max(all_found, key=lambda f: os.path.getsize(os.path.join(temp_dir, f)))
+                    shutil.move(os.path.join(temp_dir, final_filename), os.path.join(DOWNLOAD_FOLDER, final_filename))
+                    task['filename'] = final_filename
+                    task['download_url'] = f"/files/{final_filename}"
+                    task['status'] = 'completed'
+                else:
+                    raise Exception("Fallback engine failed to retrieve file.")
 
             task['logs'].append("Editing Media Tags...... Done")
             task['logs'].append("Sending File to User.....")
