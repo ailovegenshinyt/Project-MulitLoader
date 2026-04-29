@@ -1,3 +1,5 @@
+pip install --upgrade pip
+
 import os, time, shutil, threading, uuid, re, json, traceback
 import subprocess, random, requests
 import yt_dlp

@@ -3,4 +3,3 @@ yt-dlp[default]>=2024.04.09
 requests
 curl_cffi>=0.5.10
 python-dotenv
-urllib3==1.26.15
