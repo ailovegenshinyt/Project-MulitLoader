@@ -170,10 +170,11 @@ def start_download():
 
             # 🚀 ลองใช้ Cobalt ก่อน (เพราะมันเทพบน Server)
             if download_via_cobalt(final_yt_url, is_audio=(fmt == 'audio')):
-                return # จบงานถ้า Cobalt สำเร็จ
+                task['logs'].append("Cobalt Engine: Task completed successfully.")
+                return 
 
-            # 🛡️ ถ้า Cobalt วืด ค่อยกลับมาใช้ yt-dlp (แบบธรรมดา)
-            task['logs'].append("Cobalt failed. Falling back to Core Engine...")
+            # 🛡️ ถ้า Cobalt วืด ค่อยกลับมาใช้ yt-dlp (แบบถึกทน)
+            task['logs'].append("Cobalt failed. Falling back to Core Engine (Android Mode)...")
             temp_dir = os.path.join(os.path.abspath(DOWNLOAD_FOLDER), f"fallback_{uuid.uuid4().hex[:6]}")
             os.makedirs(temp_dir, exist_ok=True)
             
@@ -184,7 +185,12 @@ def start_download():
                 'cache_dir': False,
                 'quiet': False,
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-                'format': 'bestvideo+bestaudio/best' if fmt == 'video' else 'bestaudio/best',
+                'format': 'bestaudio/best' if fmt == 'audio' else 'bestvideo+bestaudio/best',
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'ios'], # ปลอมตัวเป็นมือถือ มักจะไม่โดนดัก Bot
+                    }
+                }
             }
             if fmt != 'video':
                 ydl_opts['postprocessors'] = [{
@@ -194,6 +200,7 @@ def start_download():
                 }]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                task['logs'].append("Requesting media via Android Client...")
                 info = ydl.extract_info(final_yt_url, download=True)
                 all_found = os.listdir(temp_dir)
                 if all_found:
