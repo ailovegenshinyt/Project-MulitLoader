@@ -126,9 +126,9 @@ def start_download():
             br_qual = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
             ydl_opts = {
                 'nocheckcertificate': True, 
-                'impersonate': 'chrome',       # ใช้ curl_cffi ปลอมตัวเป็น Chrome เพื่อเลี่ยง SSL EOF
+                'source_address': '0.0.0.0',   # บังคับใช้ IPv4 แก้ปัญหา SSL EOF บน Cloud Server
                 'cache_dir': False,
-                'retries': 3,
+                'retries': 5,
                 'socket_timeout': 30,
                 'quiet': False,
                 'no_warnings': False,
