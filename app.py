@@ -117,39 +117,58 @@ def start_download():
                 elif d['status'] == 'finished':
                     task['logs'].append(f"Stage: {d['postprocessor']} completed.")
 
-            # ── 🛠️ ระบบดาวน์โหลดใหม่ (Cobalt + yt-dlp Hybrid) ──────────────────
+            # ── 🛠️ ระบบดาวน์โหลดใหม่ (Cobalt Multi-Instance) ──────────────────
             def download_via_cobalt(target_url, is_audio=True):
-                task['logs'].append(f"Cobalt Engine: Requesting stream...")
-                try:
-                    c_headers = {"Accept": "application/json", "Content-Type": "application/json"}
-                    c_data = {"url": target_url, "isAudioOnly": is_audio, "downloadMode": "auto"}
-                    c_res = requests.post("https://api.cobalt.tools/api/json", json=c_data, headers=c_headers, timeout=30)
-                    
-                    if c_res.status_code == 200:
-                        res_json = c_res.json()
-                        if res_json.get('status') == 'stream' or res_json.get('status') == 'redirect':
-                            stream_url = res_json.get('url')
-                            task['logs'].append("Stream link acquired! Pulling media...")
+                # รายชื่อ Instance ของ Cobalt ที่เสถียร
+                instances = [
+                    "https://api.cobalt.tools/api/json",
+                    "https://cobalt.sh/api/json",
+                    "https://api.cobalt.best/api/json"
+                ]
+                
+                headers = {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                }
+
+                for api_url in instances:
+                    task['logs'].append(f"Cobalt: Trying instance {api_url.split('/')[2]}...")
+                    print(f"DEBUG: Trying Cobalt instance {api_url} for {target_url}")
+                    try:
+                        data = {"url": target_url, "isAudioOnly": is_audio, "vQuality": "1080"}
+                        res = requests.post(api_url, json=data, headers=headers, timeout=20)
+                        
+                        if res.status_code == 200:
+                            res_json = res.json()
+                            status = res_json.get('status')
                             
-                            # ดึงไฟล์จาก Cobalt มาเก็บที่เครื่อง
-                            f_res = requests.get(stream_url, stream=True, timeout=120)
-                            if f_res.status_code == 200:
-                                # พยายามดึงชื่อไฟล์จาก Header หรือตั้งชื่อใหม่
-                                filename = f"Downloaded_{int(time.time())}.{'mp3' if is_audio else 'mp4'}"
-                                f_path = os.path.join(DOWNLOAD_FOLDER, filename)
+                            if status in ['stream', 'redirect', 'tunnel']:
+                                stream_url = res_json.get('url')
+                                task['logs'].append("Success! Pulling stream...")
                                 
-                                with open(f_path, 'wb') as f:
-                                    for chunk in f_res.iter_content(chunk_size=8192):
-                                        f.write(chunk)
-                                
-                                task['filename'] = filename
-                                task['download_url'] = f"/files/{filename}"
-                                task['logs'].append(f"Success: {filename}")
-                                task['status'] = 'completed'
-                                return True
-                    task['logs'].append(f"Cobalt Status: {c_res.status_code} - {c_res.text[:100]}")
-                except Exception as e:
-                    task['logs'].append(f"Cobalt Error: {str(e)}")
+                                f_res = requests.get(stream_url, stream=True, timeout=120)
+                                if f_res.status_code == 200:
+                                    ext = 'mp3' if is_audio else 'mp4'
+                                    filename = f"dl_{int(time.time())}_{uuid.uuid4().hex[:4]}.{ext}"
+                                    f_path = os.path.join(DOWNLOAD_FOLDER, filename)
+                                    
+                                    with open(f_path, 'wb') as f:
+                                        for chunk in f_res.iter_content(chunk_size=16384):
+                                            f.write(chunk)
+                                    
+                                    task['filename'] = filename
+                                    task['download_url'] = f"/files/{filename}"
+                                    task['status'] = 'completed'
+                                    task['logs'].append(f"Download complete: {filename}")
+                                    return True
+                        
+                        print(f"DEBUG: Cobalt {api_url} returned status {res.status_code}")
+                        task['logs'].append(f"Cobalt {api_url.split('/')[2]} failed with status {res.status_code}")
+                    except Exception as e:
+                        print(f"DEBUG: Cobalt {api_url} Error: {str(e)}")
+                        task['logs'].append(f"Cobalt {api_url.split('/')[2]} error: {str(e)[:50]}")
+                
                 return False
 
             # --- เริ่มต้นกระบวนการ ---
