@@ -3,4 +3,5 @@ yt-dlp
 spotdl
 spotipy
 python-dotenv
-curl_cffi
+urllib3==1.26.15
+requests==2.31.0

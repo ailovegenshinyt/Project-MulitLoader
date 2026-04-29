@@ -111,13 +111,18 @@ def start_download():
                     'overwrites': True, 'nooverwrites': False,
                     'nocheckcertificate': True, 
                     'cache_dir': False,
-                    'legacy_server_connect': True, # Fix SSL issues
-                    'retries': 10,                 # Fight against EOF drops
-                    'fragment_retries': 10,
-                    'http_client': 'urllib',       # Bypass 'requests' TLS fingerprinting
-                    'extractor_args': {'youtube': {'player_client': ['android']}},
+                    'legacy_server_connect': True, 
+                    'retries': 15,                 # เพิ่มความอึด
+                    'fragment_retries': 15,
+                    'socket_timeout': 30,          # รอสายได้นานขึ้น
+                    'http_client': 'urllib',
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['web_embedded'],
+                            'player_skip': ['webpage', 'configs']
+                        }
+                    },
                     'youtube_include_dash_manifest': False,
-                    'sleep_requests': 1,           # Add small delay
                 }
 
                 if fmt == 'video':
