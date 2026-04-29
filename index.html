@@ -21,11 +21,6 @@
             <p class="subtitle">Premium Video &amp; Music Downloader (4K &amp; Playlist Support)</p>
         </header>
 
-        <!-- Tab Switcher -->
-        <div class="tab-switcher">
-            <button class="tab-btn active" id="tabUrlBtn" onclick="switchTab('url')">🔗 URL Download</button>
-            <button class="tab-btn" id="tabSearchBtn" onclick="switchTab('search')">🔍 Search Spotify</button>
-        </div>
 
         <!-- URL Tab -->
         <section id="urlTab" class="tab-content">
@@ -52,15 +47,6 @@
             <button id="downloadBtn">Start Download</button>
         </section>
 
-        <!-- Search Tab -->
-        <section id="searchTab" class="tab-content" style="display:none;">
-            <div class="search-group">
-                <input type="text" id="searchInput" placeholder="Search song, artist, album on Spotify..."
-                    autocomplete="off">
-                <button id="searchBtn" onclick="doSearch()">Search</button>
-            </div>
-            <div id="searchResults"></div>
-        </section>
 
         <!-- Terminal (shared) -->
         <div id="terminalArea" style="display:none; margin-top:1.5rem;">

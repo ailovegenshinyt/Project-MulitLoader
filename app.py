@@ -10,22 +10,15 @@ try:
 except ImportError:
     pass
 
-# ── Spotify API setup ─────────────────────────────────────────────────────────
-try:
-    import spotipy
-    from spotipy.oauth2 import SpotifyClientCredentials
-    _cid = os.environ.get('SPOTIFY_CLIENT_ID', '')
-    _sec = os.environ.get('SPOTIFY_CLIENT_SECRET', '')
-    if _cid and _sec:
-        sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=_cid, client_secret=_sec))
-        SPOTIFY_OK = True
-        print("✅ Spotify API connected.")
-    else:
-        sp = None; SPOTIFY_OK = False
-        print("⚠️  Spotify credentials missing.")
-except Exception as e:
-    sp = None; SPOTIFY_OK = False
-    print(f"⚠️  Spotify init failed: {e}")
+# ── Spotify API setup (For spotdl performance) ───────────────────────────────
+_cid = os.environ.get('SPOTIFY_CLIENT_ID', '')
+_sec = os.environ.get('SPOTIFY_CLIENT_SECRET', '')
+if _cid and _sec:
+    os.environ['SPOTIPY_CLIENT_ID'] = _cid
+    os.environ['SPOTIPY_CLIENT_SECRET'] = _sec
+    print("✅ Spotify API configured for background tasks.")
+else:
+    print("⚠️  Spotify credentials missing.")
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 DOWNLOAD_FOLDER = 'downloads'
@@ -50,40 +43,9 @@ def background_cleanup():
                 except: pass
 threading.Thread(target=background_cleanup, daemon=True).start()
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def parse_spotify_url(url):
-    m = re.search(r'spotify\.com/(track|playlist|album)/([A-Za-z0-9]+)', url)
-    return (m.group(1), m.group(2)) if m else (None, None)
-
-def ms_to_str(ms):
-    s = ms // 1000
-    return f"{s//60}:{s%60:02d}"
-
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index(): return send_file('index.html')
-
-@app.route('/search', methods=['POST'])
-def search():
-    if not SPOTIFY_OK:
-        return jsonify({'error': 'Spotify API not configured'}), 503
-    q = (request.json or {}).get('query', '').strip()
-    if not q: return jsonify({'error': 'Query required'}), 400
-    try:
-        res = sp.search(q=q, type='track', limit=8)
-        tracks = []
-        for t in res['tracks']['items']:
-            tracks.append({
-                'name':     t['name'],
-                'artist':   ', '.join(a['name'] for a in t['artists']),
-                'album':    t['album']['name'],
-                'image':    t['album']['images'][-1]['url'] if t['album']['images'] else None,
-                'url':      t['external_urls']['spotify'],
-                'duration': ms_to_str(t['duration_ms']),
-            })
-        return jsonify(tracks)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/download', methods=['POST'])
 def start_download():
@@ -102,42 +64,6 @@ def start_download():
             # ── Spotify path ─────────────────────────────────────────────────
             if 'spotify.com' in url:
                 task['logs'].append("Analysis Link....... Spotify")
-
-                # Fetch metadata via Spotify API
-                if SPOTIFY_OK:
-                    ctype, cid = parse_spotify_url(url)
-                    try:
-                        if ctype == 'track':
-                            t = sp.track(cid)
-                            task['logs'].append(f"Track   : {t['name']}")
-                            task['logs'].append(f"Artist  : {', '.join(a['name'] for a in t['artists'])}")
-                            task['logs'].append(f"Album   : {t['album']['name']}")
-                            task['logs'].append(f"Duration: {ms_to_str(t['duration_ms'])}")
-
-                        elif ctype == 'playlist':
-                            pl = sp.playlist(cid, fields='name,tracks.total')
-                            total = pl['tracks']['total']
-                            task['logs'].append(f"Playlist: {pl['name']}")
-                            task['logs'].append(f"Tracks  : {total} songs")
-                            items = sp.playlist_tracks(cid, limit=min(total, 10))['items']
-                            for i, item in enumerate(items):
-                                t = item.get('track') if item else None
-                                if t:
-                                    task['logs'].append(
-                                        f"  {i+1:02d}. {t['name']} — {', '.join(a['name'] for a in t['artists'])}"
-                                    )
-                            if total > 10:
-                                task['logs'].append(f"  ... and {total-10} more tracks")
-
-                        elif ctype == 'album':
-                            al = sp.album(cid)
-                            task['logs'].append(f"Album   : {al['name']}")
-                            task['logs'].append(f"Artist  : {', '.join(a['name'] for a in al['artists'])}")
-                            task['logs'].append(f"Tracks  : {al['total_tracks']} songs")
-                    except Exception as e:
-                        task['logs'].append(f"(Metadata note: {e})")
-
-                # Download via spotdl
                 task['logs'].append("Starting Spotify download.......")
                 temp_dir = f"{DOWNLOAD_FOLDER}/spot_{int(time.time())}"
                 os.makedirs(temp_dir, exist_ok=True)
@@ -184,6 +110,8 @@ def start_download():
                     'postprocessor_hooks': [pp_hook],
                     'overwrites': True, 'nooverwrites': False,
                     'nocheckcertificate': True, 'cache_dir': False,
+                    'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
+                    'youtube_include_dash_manifest': False,
                 }
 
                 if fmt == 'video':
@@ -203,11 +131,12 @@ def start_download():
                     task['logs'].append("Checking server cache and clearing old artifacts...")
                     info_pre = ydl.extract_info(url, download=False)
                     title_s = info_pre.get('title', 'Unknown')
-                    count = sum(
-                        1 for fn in os.listdir(DOWNLOAD_FOLDER)
-                        if title_s[:20] in fn and not os.unlink(os.path.join(DOWNLOAD_FOLDER, fn))
-                    ) if title_s else 0
-                    if count: task['logs'].append(f"Cleared {count} old files.")
+                    
+                    # Safe clear
+                    for fn in os.listdir(DOWNLOAD_FOLDER):
+                        if title_s and title_s[:20] in fn:
+                            try: os.unlink(os.path.join(DOWNLOAD_FOLDER, fn))
+                            except: pass
 
                     info = ydl.extract_info(url, download=True)
                     if 'entries' in info:
