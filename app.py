@@ -136,7 +136,7 @@ def start_download():
                     task['logs'].append(f"Cobalt: Trying instance {api_url.split('/')[2]}...")
                     print(f"DEBUG: Trying Cobalt instance {api_url} for {target_url}")
                     try:
-                        data = {"url": target_url, "isAudioOnly": is_audio, "vQuality": "1080"}
+                        data = {"url": target_url, "isAudioOnly": is_audio}
                         res = requests.post(api_url, json=data, headers=headers, timeout=20)
                         
                         if res.status_code == 200:
