@@ -334,18 +334,47 @@ button:active {
 @media (max-width: 480px) {
     .container {
         padding: 1.5rem;
+        width: 95%;
     }
-    h1 {
-        font-size: 1.8rem;
-    }
+
+    h1 { font-size: 2rem; }
+    
     .options {
-        grid-template-columns: 1fr;
+        flex-direction: column; /* Stack select boxes vertically */
+        gap: 0.8rem;
     }
-    button {
-        padding: 1rem;
-        font-size: 1rem;
+
+    .select-wrapper {
+        width: 100%;
     }
+
+    select {
+        width: 100%;
+        font-size: 0.85rem;
+        padding: 0.8rem 1rem;
+    }
+
+    .search-group {
+        flex-direction: column; /* Stack search input and button */
+    }
+
+    .search-group button {
+        width: 100%;
+    }
+
+    .tab-btn {
+        font-size: 0.75rem;
+        padding: 0.5rem 0.3rem;
+    }
+
     #terminalBody {
-        height: 120px;
+        height: 140px;
+        font-size: 0.7rem;
+    }
+
+    footer div {
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
     }
 }
