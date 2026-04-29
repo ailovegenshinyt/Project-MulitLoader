@@ -127,7 +127,7 @@ def start_download():
             ydl_opts = {
                 'nocheckcertificate': True, 
                 'legacy_server_connect': True,
-                'impersonate': 'chrome110',    # ใช้ curl_cffi ปลอมเป็น Chrome (ตอนนี้ลง dependencies ใน Docker แล้ว)
+                'impersonate': 'chrome',       # ใช้ curl_cffi ปลอมเป็น Chrome (ตอนนี้ลง dependencies แบบ Force Update แล้ว)
                 'source_address': '0.0.0.0',   # บังคับ IPv4
                 'cache_dir': False,
                 'retries': 5,
