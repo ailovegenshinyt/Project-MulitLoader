@@ -168,32 +168,53 @@ def start_download():
                     except Exception as e:
                         task['logs'].append(f"Search Warning: {e}")
 
-            # 🚀 ลองใช้ Cobalt ก่อน (เพราะมันเทพบน Server)
-            if download_via_cobalt(final_yt_url, is_audio=(fmt == 'audio')):
-                task['logs'].append("Cobalt Engine: Task completed successfully.")
+            # 🚀 ขั้นตอนที่ 1: ลองส่งให้ Cobalt จัดการก่อน (Cobalt รองรับทั้ง YT และ Spotify ตรงๆ)
+            task['logs'].append(f"Primary Engine: Testing Cobalt for {url[:30]}...")
+            if download_via_cobalt(url, is_audio=(fmt == 'audio')):
+                task['logs'].append("Cobalt Engine: Success!")
                 return 
 
-            # 🛡️ ถ้า Cobalt วืด ค่อยกลับมาใช้ yt-dlp (แบบถึกทน)
-            task['logs'].append("Cobalt failed. Falling back to Core Engine (Bypass Mode)...")
+            # 🔎 ขั้นตอนที่ 2: ถ้า Cobalt วืด และเป็น Spotify/Search ให้หา URL YouTube มาก่อน
+            final_yt_url = url
+            if 'spotify.com' in url or url.startswith('ytsearch'):
+                task['logs'].append("Secondary Engine: Searching for YouTube source...")
+                # ใช้ config ที่คลีนที่สุดเพื่อเลี่ยงการ Crash
+                search_opts = {
+                    'quiet': True, 
+                    'extract_flat': True, 
+                    'nocheckcertificate': True,
+                    'legacy_server_connect': True,
+                    'source_address': '0.0.0.0'
+                }
+                with yt_dlp.YoutubeDL(search_opts) as ydl:
+                    try:
+                        search_info = ydl.extract_info(url, download=False)
+                        if 'entries' in search_info and search_info['entries']:
+                            final_yt_url = search_info['entries'][0]['url']
+                            task['logs'].append(f"Found: {final_yt_url}")
+                        else:
+                            final_yt_url = search_info.get('webpage_url', url)
+                    except Exception as e:
+                        task['logs'].append(f"Search Warning: {str(e)[:100]}")
+
+            # 🚀 ขั้นตอนที่ 3: ลอง Cobalt อีกครั้งด้วย URL YouTube ที่หามาได้
+            if final_yt_url != url:
+                if download_via_cobalt(final_yt_url, is_audio=(fmt == 'audio')):
+                    return
+
+            # 🛡️ ขั้นตอนที่ 4: ไม้ตายสุดท้าย Fallback ไปที่ Core Engine (แบบ Basic)
+            task['logs'].append("Fallback Engine: Core Engine starting (Basic Mode)...")
             temp_dir = os.path.join(os.path.abspath(DOWNLOAD_FOLDER), f"fallback_{uuid.uuid4().hex[:6]}")
             os.makedirs(temp_dir, exist_ok=True)
             
             ydl_opts = {
                 'nocheckcertificate': True, 
                 'legacy_server_connect': True,
-                'impersonate': 'chrome120',    # ระบุเวอร์ชั่นเจาะจงเพื่อความชัวร์
                 'source_address': '0.0.0.0',
                 'cache_dir': False,
                 'quiet': False,
-                'check_formats': False,        # ลดจำนวนการเช็คไฟล์เพื่อเลี่ยงการโดนบล็อก
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                 'format': 'bestaudio/best' if fmt == 'audio' else 'bestvideo+bestaudio/best',
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'ios'], # ใช้มือถือเท่านั้น
-                        'player_skip': ['web', 'web_embedded'] # สั่งข้ามระบบเว็บที่มักจะโดนบล็อก
-                    }
-                }
             }
             if fmt != 'video':
                 ydl_opts['postprocessors'] = [{
@@ -203,7 +224,6 @@ def start_download():
                 }]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                task['logs'].append("Requesting media via Android Client...")
                 info = ydl.extract_info(final_yt_url, download=True)
                 all_found = os.listdir(temp_dir)
                 if all_found:
@@ -213,7 +233,7 @@ def start_download():
                     task['download_url'] = f"/files/{final_filename}"
                     task['status'] = 'completed'
                 else:
-                    raise Exception("Fallback engine failed to retrieve file.")
+                    raise Exception("All engines failed.")
 
             task['logs'].append("Editing Media Tags...... Done")
             task['logs'].append("Sending File to User.....")
