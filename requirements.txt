@@ -1,5 +1,5 @@
 Flask
-yt-dlp[default]>=2024.04.09
+yt-dlp
 requests
-curl_cffi>=0.5.10
+curl_cffi
 python-dotenv

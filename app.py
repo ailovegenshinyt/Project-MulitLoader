@@ -174,21 +174,24 @@ def start_download():
                 return 
 
             # 🛡️ ถ้า Cobalt วืด ค่อยกลับมาใช้ yt-dlp (แบบถึกทน)
-            task['logs'].append("Cobalt failed. Falling back to Core Engine (Android Mode)...")
+            task['logs'].append("Cobalt failed. Falling back to Core Engine (Bypass Mode)...")
             temp_dir = os.path.join(os.path.abspath(DOWNLOAD_FOLDER), f"fallback_{uuid.uuid4().hex[:6]}")
             os.makedirs(temp_dir, exist_ok=True)
             
             ydl_opts = {
                 'nocheckcertificate': True, 
                 'legacy_server_connect': True,
+                'impersonate': 'chrome120',    # ระบุเวอร์ชั่นเจาะจงเพื่อความชัวร์
                 'source_address': '0.0.0.0',
                 'cache_dir': False,
                 'quiet': False,
+                'check_formats': False,        # ลดจำนวนการเช็คไฟล์เพื่อเลี่ยงการโดนบล็อก
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                 'format': 'bestaudio/best' if fmt == 'audio' else 'bestvideo+bestaudio/best',
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'ios'], # ปลอมตัวเป็นมือถือ มักจะไม่โดนดัก Bot
+                        'player_client': ['android', 'ios'], # ใช้มือถือเท่านั้น
+                        'player_skip': ['web', 'web_embedded'] # สั่งข้ามระบบเว็บที่มักจะโดนบล็อก
                     }
                 }
             }
