@@ -44,7 +44,7 @@ Access at: `http://localhost:7860`
 The app is optimized for HuggingFace Spaces out-of-the-box. No secrets required!
 
 ## Tech Stack
-- **Backend**: Python, Flask, yt-dlp, spotdl, spotipy
+- **Backend**: Python, Flask, yt-dlp, requests, curl_cffi
 - **Frontend**: Vanilla HTML/CSS/JS (Glassmorphism UI)
 - **Media Processing**: FFmpeg
 

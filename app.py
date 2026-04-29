@@ -67,29 +67,46 @@ def start_download():
             # แสดงผลใน Console ของเพื่อนด้วย
             print(f"--- Task {task_id} Started ---")
 
-            # ── Cross-Platform Metadata Resolution ───────────────────────────────────
+            # ── Spotify Identity Resolver (Direct Metadata API) ──────────────────────
             if 'spotify.com' in url:
-                task['logs'].append("Analysis Link....... Spotify (Bypass Mode)")
-                task['logs'].append("Fetching track identity from Spotify Global...")
+                task['logs'].append("Analysis Link....... Spotify (API Identity Mode)")
+                task['logs'].append("Resolving track identity via Global Metadata API...")
                 
-                search_query = url
+                search_query = ""
                 try:
-                    # ดึงชื่อเพลงจากระบบแชร์ของ Spotify (ไม่ต้องใช้ API Key)
-                    oembed_url = f"https://open.spotify.com/oembed?url={url}"
-                    res = requests.get(oembed_url, timeout=10)
+                    # ดึง ID จากลิงก์
+                    track_id = url.split('track/')[1].split('?')[0]
+                    # ใช้ API ของ SpotifyDown (ตัวแม่นที่สุด)
+                    api_url = f"https://api.spotifydown.com/metadata/track/{track_id}"
+                    
+                    res = requests.get(api_url, timeout=15)
                     if res.status_code == 200:
                         data = res.json()
-                        song_title = data.get('title', 'Unknown')
-                        search_query = song_title
-                        task['logs'].append(f"Identified Track: {search_query}")
+                        if data.get('success'):
+                            title = data.get('title', 'Unknown')
+                            artist = data.get('artists', 'Unknown')
+                            search_query = f"{title} {artist}".strip()
+                            task['logs'].append(f"Identified: {search_query}")
+                        else:
+                            raise Exception("Metadata API returned no success.")
                     else:
-                        task['logs'].append("⚠️ Identity fetch failed, using raw URL.")
+                        raise Exception(f"Metadata API Status {res.status_code}")
+
                 except Exception as e:
-                    task['logs'].append(f"⚠️ Metadata error: {e}")
+                    task['logs'].append(f"⚠️ Metadata Failure: {e}")
+                    # ถ้าดึงชื่อไม่ได้จริงๆ ลองใช้ oEmbed เป็นทางเลือกสุดท้าย
+                    try:
+                        o_res = requests.get(f"https://open.spotify.com/oembed?url={url}", timeout=10)
+                        if o_res.status_code == 200:
+                            search_query = o_res.json().get('title', '')
+                    except: pass
                 
-                # หัวใจสำคัญ: แปลงร่างลิงก์ Spotify เป็นการค้นหาใน YouTube Music
-                url = f"ytsearch1:{search_query} audio"
-                task['logs'].append("Redirecting to YouTube Music equivalent...")
+                if not search_query:
+                    raise Exception("Could not identify Spotify track. Please check the link or try a YouTube link.")
+
+                # แปลงร่างเป็นคำค้นหา YouTube (ห้ามส่งลิงก์ Spotify ให้ yt-dlp เด็ดขาด!)
+                url = f"ytsearch1:{search_query}"
+                task['logs'].append(f"Redirecting to YouTube Engine: {search_query}")
 
             # ── Core Download Engine (yt-dlp) ────────────────────────────────────────
             task['logs'].append("Warming up Core Engine...")
@@ -141,45 +158,44 @@ def start_download():
                     {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
                 ]
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                task['logs'].append("Checking server cache and clearing old artifacts...")
-                info_pre = ydl.extract_info(url, download=False)
-                title_s = info_pre.get('title', 'Unknown')
+                # --- ระบบดาวน์โหลด (Debug Mode) ---
+                abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
+                temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+                temp_dir = os.path.join(abs_download_path, temp_dir_name)
+                os.makedirs(temp_dir, exist_ok=True)
                 
-                # Safe clear
-                for fn in os.listdir(DOWNLOAD_FOLDER):
-                    if title_s and title_s[:20] in fn:
-                        try: os.unlink(os.path.join(DOWNLOAD_FOLDER, fn))
-                        except: pass
+                # ปิด Quiet เพื่อดู Log ใน Terminal
+                ydl_opts['quiet'] = False
+                ydl_opts['no_warnings'] = False
+                ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-                info = ydl.extract_info(url, download=True)
-                if 'entries' in info:
-                    title = info.get('title', 'Playlist')
-                    task['logs'].append(f"Downloading Playlist: [{title}].......")
-                    temp_dir = f"{DOWNLOAD_FOLDER}/yt_{int(time.time())}"
-                    os.makedirs(temp_dir, exist_ok=True)
-                    for e in info['entries']:
-                        if e:
-                            f = ydl.prepare_filename(e)
-                            if fmt != 'video':
-                                f = os.path.splitext(f)[0] + ('.mp3' if fmt == 'audio' else '.wav')
-                            if os.path.exists(f):
-                                shutil.move(f, os.path.join(temp_dir, os.path.basename(f)))
-                    zip_name = f"{title}_{int(time.time())}"
-                    shutil.make_archive(f"{DOWNLOAD_FOLDER}/{zip_name}", 'zip', temp_dir)
-                    task['filename'] = f"{zip_name}.zip"
-                    task['download_url'] = f"/files/{zip_name}.zip"
-                else:
-                    title = info.get('title', 'Media')
-                    task['logs'].append(f"Downloading [{title}].......")
-                    f = ydl.prepare_filename(info)
-                    if fmt != 'video':
-                        f = os.path.splitext(f)[0] + ('.mp3' if fmt == 'audio' else '.wav')
-                    if os.path.exists(f):
-                        task['filename'] = os.path.basename(f)
-                        task['download_url'] = f"/files/{os.path.basename(f)}"
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    task['logs'].append("Starting media engine... (Check terminal for details)")
+                    info = ydl.extract_info(url, download=True)
+                    
+                    entries = info.get('entries', [])
+                    all_found = os.listdir(temp_dir)
+                    task['logs'].append(f"Debug: Files in temp: {all_found}")
+
+                    if len(entries) > 1 or (not entries and 'playlist' in url):
+                        # กรณี Playlist
+                        title = info.get('title', 'Playlist')
+                        task['logs'].append(f"Zipping Playlist: {title}")
+                        zip_name = f"Playlist_{int(time.time())}"
+                        shutil.make_archive(os.path.join(abs_download_path, zip_name), 'zip', temp_dir)
+                        task['filename'] = f"{zip_name}.zip"
+                        task['download_url'] = f"/files/{zip_name}.zip"
                     else:
-                        raise Exception("Download completed but file not found on server.")
+                        # กรณีไฟล์เดียว
+                        if all_found:
+                            # เลือกไฟล์ที่ขนาดใหญ่ที่สุด (มักจะเป็นไฟล์เพลงที่แปลงเสร็จแล้ว)
+                            final_filename = max(all_found, key=lambda f: os.path.getsize(os.path.join(temp_dir, f)))
+                            shutil.move(os.path.join(temp_dir, final_filename), os.path.join(abs_download_path, final_filename))
+                            task['filename'] = final_filename
+                            task['download_url'] = f"/files/{final_filename}"
+                            task['logs'].append(f"Success: {final_filename}")
+                        else:
+                            raise Exception(f"Processor finished but {temp_dir} is empty! Check Terminal.")
 
             task['logs'].append("Editing Media Tags...... Done")
             task['logs'].append("Sending File to User.....")
