@@ -1,6 +1,6 @@
-Flask==3.0.3
-yt-dlp==2024.4.9
-spotdl==4.2.4
-spotipy==2.23.0
-python-dotenv==1.0.1
-curl_cffi==0.5.10
+Flask
+yt-dlp
+spotdl
+spotipy
+python-dotenv
+curl_cffi
