@@ -117,57 +117,40 @@ def start_download():
                 elif d['status'] == 'finished':
                     task['logs'].append(f"Stage: {d['postprocessor']} completed.")
 
+            # --- ระบบดาวน์โหลด (Hugging Face / SSL Bypass Mode) ---
+            abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
+            temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            temp_dir = os.path.join(abs_download_path, temp_dir_name)
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            br_qual = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
             ydl_opts = {
-                'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
-                'quiet': True, 'no_warnings': True,
-                'user_agent': random.choice([
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
-                ]),
-                'progress_hooks': [lambda d: None],
-                'postprocessor_hooks': [pp_hook],
-                'overwrites': True, 'nooverwrites': False,
                 'nocheckcertificate': True, 
+                'impersonate': 'chrome',       # ใช้ curl_cffi ปลอมตัวเป็น Chrome เพื่อเลี่ยง SSL EOF
                 'cache_dir': False,
-                'legacy_server_connect': True, 
-                'retries': 5,                  # ลดจำนวน Retry ให้รู้ผลไวขึ้น
-                'fragment_retries': 5,
-                'socket_timeout': 15,          # ลด Timeout ลงหน่อย
-                'http_client': 'urllib',
+                'retries': 3,
+                'socket_timeout': 30,
+                'quiet': False,
+                'no_warnings': False,
+                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['ios', 'android', 'web'], # เพิ่ม web เข้าไป
+                        'player_client': ['web', 'android'],
                     }
-                },
-                'youtube_include_dash_manifest': False,
+                }
             }
-                
-            task['logs'].append("🌐 [Direct Mode] Active.")
 
             if fmt == 'video':
-                res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
-                ydl_opts['format'] = f'bestvideo[height<={res}]+bestaudio/best'
+                v_res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
+                ydl_opts['format'] = f'bestvideo[height<={v_res}]+bestaudio/best'
                 ydl_opts['postprocessors'] = [{'key':'FFmpegMetadata'},{'key':'EmbedThumbnail'}]
             else:
-                br = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
                 ext = 'mp3' if fmt == 'audio' else 'wav'
                 ydl_opts['format'] = 'bestaudio/best'
                 ydl_opts['postprocessors'] = [
-                    {'key':'FFmpegExtractAudio','preferredcodec':ext,'preferredquality':br},
+                    {'key':'FFmpegExtractAudio','preferredcodec':ext,'preferredquality':br_qual},
                     {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
                 ]
-
-                # --- ระบบดาวน์โหลด (Debug Mode) ---
-                abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
-                temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-                temp_dir = os.path.join(abs_download_path, temp_dir_name)
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                # ปิด Quiet เพื่อดู Log ใน Terminal
-                ydl_opts['quiet'] = False
-                ydl_opts['no_warnings'] = False
-                ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     task['logs'].append("Starting media engine... (Check terminal for details)")
