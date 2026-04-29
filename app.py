@@ -10,52 +10,31 @@ try:
 except ImportError:
     pass
 
-# ── Proxy / IP Rotation System ───────────────────────────────────────────────
-PROXY_LIST = []
-
-def refresh_proxies():
-    global PROXY_LIST
-    try:
-        url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=all"
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            lines = res.text.strip().split('\n')
-            PROXY_LIST = [f"http://{p.strip()}" for p in lines if p.strip()]
-            print(f"✅ Loaded {len(PROXY_LIST)} proxies for IP Rotation.")
-    except Exception as e:
-        print(f"⚠️ Proxy fetch failed: {e}")
-
-def get_random_proxy():
-    if not PROXY_LIST:
-        refresh_proxies()
-    if PROXY_LIST:
-        return random.choice(PROXY_LIST)
-    return None
-
-# ── Spotify API setup (For spotdl performance) ───────────────────────────────
-_cid = os.environ.get('SPOTIFY_CLIENT_ID', '')
-_sec = os.environ.get('SPOTIFY_CLIENT_SECRET', '')
-if _cid and _sec:
-    os.environ['SPOTIPY_CLIENT_ID'] = _cid
-    os.environ['SPOTIPY_CLIENT_SECRET'] = _sec
-    print("✅ Spotify API configured for background tasks.")
-else:
-    print("⚠️  Spotify credentials missing.")
-
+# ── Configuration ──────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder='.', static_url_path='')
 DOWNLOAD_FOLDER = 'downloads'
+
+# --- ล้างโฟลเดอร์ downloads ทุกครั้งที่เริ่มแอป ---
+if os.path.exists(DOWNLOAD_FOLDER):
+    try:
+        shutil.rmtree(DOWNLOAD_FOLDER)
+        print("🧹 Startup Cleanup: Old downloads cleared.")
+    except Exception as e:
+        print(f"⚠️ Startup Cleanup failed: {e}")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
 tasks = {}
 
-# ── Background cleanup ────────────────────────────────────────────────────────
+# ── Background cleanup (ทุกๆ 5 นาที) ──────────────────────────────────────────
 def background_cleanup():
     while True:
-        time.sleep(300)
+        time.sleep(300) # 5 นาที
         t = time.time()
         for root, dirs, files in os.walk(DOWNLOAD_FOLDER, topdown=False):
             for f in files:
                 fp = os.path.join(root, f)
                 try:
+                    # ลบไฟล์ที่เก่ากว่า 5 นาที
                     if os.path.getmtime(fp) < t - 300: os.unlink(fp)
                 except: pass
             for d in dirs:
@@ -80,135 +59,127 @@ def start_download():
 
     def run(task_id, url, fmt, quality):
         task = tasks[task_id]
-        proxy = get_random_proxy()
-        env = os.environ.copy()
+        
         try:
             task['logs'].append("Connecting to MultiLoader Engine....... Done")
-            if proxy:
-                task['logs'].append(f"🔄 [IP Rotation] Active: {proxy}")
-                env['HTTP_PROXY'] = proxy
-                env['HTTPS_PROXY'] = proxy
-            else:
-                task['logs'].append("⚠️ Running direct connection (No proxy).")
+            task['logs'].append("🌐 [Direct Mode] Active.")
+            
+            # แสดงผลใน Console ของเพื่อนด้วย
+            print(f"--- Task {task_id} Started ---")
 
-            # ── Spotify path ─────────────────────────────────────────────────
+            # ── Cross-Platform Metadata Resolution ───────────────────────────────────
             if 'spotify.com' in url:
-                task['logs'].append("Analysis Link....... Spotify")
-                task['logs'].append("Starting Spotify download.......")
-                temp_dir = f"{DOWNLOAD_FOLDER}/spot_{int(time.time())}"
-                os.makedirs(temp_dir, exist_ok=True)
-                ext = 'mp3' if fmt == 'audio' else 'wav'
-                cmd = ['spotdl', 'download', url, '--output', f'{temp_dir}/', '--format', ext]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-                track_num = 0
-                for line in proc.stdout:
-                    line = line.strip()
-                    if not line: continue
-                    if 'Downloading' in line or 'Downloaded' in line or 'Found' in line or 'Skipping' in line:
-                        track_num += 1
-                        task['logs'].append(f"Track {track_num}: {line}")
-                proc.wait()
+                task['logs'].append("Analysis Link....... Spotify (Bypass Mode)")
+                task['logs'].append("Fetching track identity from Spotify Global...")
+                
+                search_query = url
+                try:
+                    # ดึงชื่อเพลงจากระบบแชร์ของ Spotify (ไม่ต้องใช้ API Key)
+                    oembed_url = f"https://open.spotify.com/oembed?url={url}"
+                    res = requests.get(oembed_url, timeout=10)
+                    if res.status_code == 200:
+                        data = res.json()
+                        song_title = data.get('title', 'Unknown')
+                        search_query = song_title
+                        task['logs'].append(f"Identified Track: {search_query}")
+                    else:
+                        task['logs'].append("⚠️ Identity fetch failed, using raw URL.")
+                except Exception as e:
+                    task['logs'].append(f"⚠️ Metadata error: {e}")
+                
+                # หัวใจสำคัญ: แปลงร่างลิงก์ Spotify เป็นการค้นหาใน YouTube Music
+                url = f"ytsearch1:{search_query} audio"
+                task['logs'].append("Redirecting to YouTube Music equivalent...")
 
-                files = os.listdir(temp_dir)
-                if len(files) == 1:
-                    fp = os.path.join(temp_dir, files[0])
-                    shutil.move(fp, os.path.join(DOWNLOAD_FOLDER, files[0]))
-                    task['filename'] = files[0]
-                    task['download_url'] = f"/files/{files[0]}"
-                elif len(files) > 1:
-                    zip_name = f"Spotify_{int(time.time())}"
+            # ── Core Download Engine (yt-dlp) ────────────────────────────────────────
+            task['logs'].append("Warming up Core Engine...")
+
+            def pp_hook(d):
+                if d['status'] == 'started':
+                    task['logs'].append(f"Stage: {d['postprocessor']} started...")
+                elif d['status'] == 'finished':
+                    task['logs'].append(f"Stage: {d['postprocessor']} completed.")
+
+            ydl_opts = {
+                'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
+                'quiet': True, 'no_warnings': True,
+                'user_agent': random.choice([
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+                ]),
+                'progress_hooks': [lambda d: None],
+                'postprocessor_hooks': [pp_hook],
+                'overwrites': True, 'nooverwrites': False,
+                'nocheckcertificate': True, 
+                'cache_dir': False,
+                'legacy_server_connect': True, 
+                'retries': 5,                  # ลดจำนวน Retry ให้รู้ผลไวขึ้น
+                'fragment_retries': 5,
+                'socket_timeout': 15,          # ลด Timeout ลงหน่อย
+                'http_client': 'urllib',
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios', 'android', 'web'], # เพิ่ม web เข้าไป
+                    }
+                },
+                'youtube_include_dash_manifest': False,
+            }
+                
+            task['logs'].append("🌐 [Direct Mode] Active.")
+
+            if fmt == 'video':
+                res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
+                ydl_opts['format'] = f'bestvideo[height<={res}]+bestaudio/best'
+                ydl_opts['postprocessors'] = [{'key':'FFmpegMetadata'},{'key':'EmbedThumbnail'}]
+            else:
+                br = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
+                ext = 'mp3' if fmt == 'audio' else 'wav'
+                ydl_opts['format'] = 'bestaudio/best'
+                ydl_opts['postprocessors'] = [
+                    {'key':'FFmpegExtractAudio','preferredcodec':ext,'preferredquality':br},
+                    {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
+                ]
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                task['logs'].append("Checking server cache and clearing old artifacts...")
+                info_pre = ydl.extract_info(url, download=False)
+                title_s = info_pre.get('title', 'Unknown')
+                
+                # Safe clear
+                for fn in os.listdir(DOWNLOAD_FOLDER):
+                    if title_s and title_s[:20] in fn:
+                        try: os.unlink(os.path.join(DOWNLOAD_FOLDER, fn))
+                        except: pass
+
+                info = ydl.extract_info(url, download=True)
+                if 'entries' in info:
+                    title = info.get('title', 'Playlist')
+                    task['logs'].append(f"Downloading Playlist: [{title}].......")
+                    temp_dir = f"{DOWNLOAD_FOLDER}/yt_{int(time.time())}"
+                    os.makedirs(temp_dir, exist_ok=True)
+                    for e in info['entries']:
+                        if e:
+                            f = ydl.prepare_filename(e)
+                            if fmt != 'video':
+                                f = os.path.splitext(f)[0] + ('.mp3' if fmt == 'audio' else '.wav')
+                            if os.path.exists(f):
+                                shutil.move(f, os.path.join(temp_dir, os.path.basename(f)))
+                    zip_name = f"{title}_{int(time.time())}"
                     shutil.make_archive(f"{DOWNLOAD_FOLDER}/{zip_name}", 'zip', temp_dir)
                     task['filename'] = f"{zip_name}.zip"
                     task['download_url'] = f"/files/{zip_name}.zip"
                 else:
-                    raise Exception("Spotify download produced no files.")
-
-            # ── YouTube path ─────────────────────────────────────────────────
-            else:
-                task['logs'].append("Analysis Link....... YouTube")
-
-                def pp_hook(d):
-                    if d['status'] == 'started':
-                        task['logs'].append(f"Stage: {d['postprocessor']} started...")
-                    elif d['status'] == 'finished':
-                        task['logs'].append(f"Stage: {d['postprocessor']} completed.")
-
-                ydl_opts = {
-                    'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
-                    'quiet': True, 'no_warnings': True,
-                    'progress_hooks': [lambda d: None],
-                    'postprocessor_hooks': [pp_hook],
-                    'overwrites': True, 'nooverwrites': False,
-                    'nocheckcertificate': True, 
-                    'cache_dir': False,
-                    'legacy_server_connect': True, 
-                    'retries': 15,                 
-                    'fragment_retries': 15,
-                    'socket_timeout': 30,          
-                    'http_client': 'urllib',
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['ios', 'android'],
-                        }
-                    },
-                    'youtube_include_dash_manifest': False,
-                }
-                
-                if proxy:
-                    ydl_opts['proxy'] = proxy
-
-                if fmt == 'video':
-                    res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
-                    ydl_opts['format'] = f'bestvideo[height<={res}]+bestaudio/best'
-                    ydl_opts['postprocessors'] = [{'key':'FFmpegMetadata'},{'key':'EmbedThumbnail'}]
-                else:
-                    br = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
-                    ext = 'mp3' if fmt == 'audio' else 'wav'
-                    ydl_opts['format'] = 'bestaudio/best'
-                    ydl_opts['postprocessors'] = [
-                        {'key':'FFmpegExtractAudio','preferredcodec':ext,'preferredquality':br},
-                        {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
-                    ]
-
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    task['logs'].append("Checking server cache and clearing old artifacts...")
-                    info_pre = ydl.extract_info(url, download=False)
-                    title_s = info_pre.get('title', 'Unknown')
-                    
-                    # Safe clear
-                    for fn in os.listdir(DOWNLOAD_FOLDER):
-                        if title_s and title_s[:20] in fn:
-                            try: os.unlink(os.path.join(DOWNLOAD_FOLDER, fn))
-                            except: pass
-
-                    info = ydl.extract_info(url, download=True)
-                    if 'entries' in info:
-                        title = info.get('title', 'Playlist')
-                        task['logs'].append(f"Downloading Playlist: [{title}].......")
-                        temp_dir = f"{DOWNLOAD_FOLDER}/yt_{int(time.time())}"
-                        os.makedirs(temp_dir, exist_ok=True)
-                        for e in info['entries']:
-                            if e:
-                                f = ydl.prepare_filename(e)
-                                if fmt != 'video':
-                                    f = os.path.splitext(f)[0] + ('.mp3' if fmt == 'audio' else '.wav')
-                                if os.path.exists(f):
-                                    shutil.move(f, os.path.join(temp_dir, os.path.basename(f)))
-                        zip_name = f"{title}_{int(time.time())}"
-                        shutil.make_archive(f"{DOWNLOAD_FOLDER}/{zip_name}", 'zip', temp_dir)
-                        task['filename'] = f"{zip_name}.zip"
-                        task['download_url'] = f"/files/{zip_name}.zip"
+                    title = info.get('title', 'Media')
+                    task['logs'].append(f"Downloading [{title}].......")
+                    f = ydl.prepare_filename(info)
+                    if fmt != 'video':
+                        f = os.path.splitext(f)[0] + ('.mp3' if fmt == 'audio' else '.wav')
+                    if os.path.exists(f):
+                        task['filename'] = os.path.basename(f)
+                        task['download_url'] = f"/files/{os.path.basename(f)}"
                     else:
-                        title = info.get('title', 'Media')
-                        task['logs'].append(f"Downloading [{title}].......")
-                        f = ydl.prepare_filename(info)
-                        if fmt != 'video':
-                            f = os.path.splitext(f)[0] + ('.mp3' if fmt == 'audio' else '.wav')
-                        if os.path.exists(f):
-                            task['filename'] = os.path.basename(f)
-                            task['download_url'] = f"/files/{os.path.basename(f)}"
-                        else:
-                            raise Exception("Download completed but file not found on server.")
+                        raise Exception("Download completed but file not found on server.")
 
             task['logs'].append("Editing Media Tags...... Done")
             task['logs'].append("Sending File to User.....")

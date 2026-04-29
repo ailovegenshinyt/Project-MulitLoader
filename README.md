@@ -33,15 +33,6 @@ MultiLoader is a high-performance video and music downloader that supports YouTu
 pip install -r requirements.txt
 ```
 
-### Environment Variables
-Copy `.env.example` to `.env` and fill in your Spotify API credentials:
-```
-SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_CLIENT_SECRET=your_client_secret
-```
-
-Get credentials at: https://developer.spotify.com/dashboard
-
 ### Run
 ```bash
 python app.py
@@ -50,9 +41,7 @@ python app.py
 Access at: `http://localhost:7860`
 
 ## HuggingFace Spaces
-Set these as **Secrets** in your Space settings:
-- `SPOTIFY_CLIENT_ID`
-- `SPOTIFY_CLIENT_SECRET`
+The app is optimized for HuggingFace Spaces out-of-the-box. No secrets required!
 
 ## Tech Stack
 - **Backend**: Python, Flask, yt-dlp, spotdl, spotipy
