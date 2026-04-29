@@ -114,8 +114,7 @@ def start_download():
                     'legacy_server_connect': True, # Fix SSL issues
                     'retries': 10,                 # Fight against EOF drops
                     'fragment_retries': 10,
-                    'impersonate': 'chrome110',    # Fake SSL Fingerprint
-                    'http_client': 'curl_cffi',    # Use curl_cffi for requests
+                    'http_client': 'urllib',       # Bypass 'requests' TLS fingerprinting
                     'extractor_args': {'youtube': {'player_client': ['android']}},
                     'youtube_include_dash_manifest': False,
                     'sleep_requests': 1,           # Add small delay
