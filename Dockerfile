@@ -1,11 +1,8 @@
 FROM python:3.10-slim
 
-# Install FFmpeg, Node.js (for yt-dlp JS execution) and curl_cffi dependencies
+# Install FFmpeg (required by yt-dlp and spotdl)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    nodejs \
-    libnss3 \
-    libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -43,15 +43,12 @@ document.addEventListener('DOMContentLoaded', () => {
             let queue = [];
             const interval = setInterval(() => {
                 if (queue.length) {
-                    const count = Math.min(queue.length, 5);
-                    for (let i = 0; i < count; i++) {
-                        const d = document.createElement('div');
-                        d.textContent = queue.shift();
-                        terminalBody.appendChild(d);
-                    }
+                    const d = document.createElement('div');
+                    d.textContent = queue.shift();
+                    terminalBody.appendChild(d);
                     terminalBody.scrollTop = terminalBody.scrollHeight;
                 }
-            }, 100);
+            }, 300);
 
             sse.addEventListener('log', e => queue.push(e.data));
 
@@ -60,14 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(() => {
                     clearInterval(interval);
                     sse.close();
-                    
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = encodeURI(result.download_url);
-                    a.download = result.filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    setTimeout(() => document.body.removeChild(a), 100);
+                    window.location.href = encodeURI(result.download_url);
                     downloadBtn.disabled    = false;
                     downloadBtn.textContent = 'Start New Download';
                     const done = document.createElement('div');

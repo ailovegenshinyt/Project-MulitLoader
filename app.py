@@ -28,14 +28,14 @@ tasks = {}
 # ── Background cleanup (ทุกๆ 5 นาที) ──────────────────────────────────────────
 def background_cleanup():
     while True:
-        time.sleep(3600) # 60 นาที (1 ชั่วโมง)
+        time.sleep(300) # 5 นาที
         t = time.time()
         for root, dirs, files in os.walk(DOWNLOAD_FOLDER, topdown=False):
             for f in files:
                 fp = os.path.join(root, f)
                 try:
-                    # ลบไฟล์ที่เก่ากว่า 1 ชั่วโมง
-                    if os.path.getmtime(fp) < t - 3600: os.unlink(fp)
+                    # ลบไฟล์ที่เก่ากว่า 5 นาที
+                    if os.path.getmtime(fp) < t - 300: os.unlink(fp)
                 except: pass
             for d in dirs:
                 dp = os.path.join(root, d)
@@ -111,87 +111,91 @@ def start_download():
             # ── Core Download Engine (yt-dlp) ────────────────────────────────────────
             task['logs'].append("Warming up Core Engine...")
 
-            last_p = -10
-            def progress_hook(d):
-                nonlocal last_p
-                if d['status'] == 'downloading':
-                    try:
-                        p_str = d.get('_percent_str', '0.0%')
-                        clean_p = re.sub(r'\x1b\[[0-9;]*m', '', p_str).replace('%', '').strip()
-                        p = float(clean_p)
-                        if p - last_p >= 5 or p >= 100:
-                            s = d.get('_speed_str', '0.00KiB/s')
-                            clean_s = re.sub(r'\x1b\[[0-9;]*m', '', s).strip()
-                            task['logs'].append(f"Downloading... {p:.1f}% (Speed: {clean_s})")
-                            last_p = p
-                    except Exception:
-                        pass
-                elif d['status'] == 'finished':
-                    task['logs'].append("Download complete, merging files...")
-
             def pp_hook(d):
                 if d['status'] == 'started':
                     task['logs'].append(f"Stage: {d['postprocessor']} started...")
                 elif d['status'] == 'finished':
                     task['logs'].append(f"Stage: {d['postprocessor']} completed.")
 
-            # --- เริ่มต้นกระบวนการ ---
-            # 🔎 ถ้าเป็น Spotify หรือค้นหา ให้หา URL YouTube มาก่อน
-            final_yt_url = url
-            if 'spotify.com' in url or url.startswith('ytsearch'):
-                task['logs'].append("Searching for YouTube source...")
-                search_opts = {
-                    'quiet': True, 
-                    'extract_flat': True, 
-                    'nocheckcertificate': True,
-                    'legacy_server_connect': True,
-                    'source_address': '0.0.0.0'
-                }
-                with yt_dlp.YoutubeDL(search_opts) as ydl:
-                    try:
-                        search_info = ydl.extract_info(url, download=False)
-                        if 'entries' in search_info and search_info['entries']:
-                            final_yt_url = search_info['entries'][0]['url']
-                            task['logs'].append(f"Found: {final_yt_url}")
-                        else:
-                            final_yt_url = search_info.get('webpage_url', url)
-                    except Exception as e:
-                        task['logs'].append(f"Search Warning: {str(e)[:100]}")
-
-            # 🛡️ ขั้นตอนสุดท้าย: ดาวน์โหลดด้วย Core Engine (Urllib3 Downgrade Mode)
-            task['logs'].append("Core Engine starting...")
-            temp_dir = os.path.join(os.path.abspath(DOWNLOAD_FOLDER), f"fallback_{uuid.uuid4().hex[:6]}")
-            os.makedirs(temp_dir, exist_ok=True)
-            
             ydl_opts = {
-                'nocheckcertificate': True, 
-                'legacy_server_connect': True,
-                'source_address': '0.0.0.0',
-                'cache_dir': False,
-                'quiet': True,
-                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-                'format': 'bestaudio/best' if fmt == 'audio' else 'bestvideo+bestaudio/best',
-                'progress_hooks': [progress_hook],
+                'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
+                'quiet': True, 'no_warnings': True,
+                'user_agent': random.choice([
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+                ]),
+                'progress_hooks': [lambda d: None],
                 'postprocessor_hooks': [pp_hook],
+                'overwrites': True, 'nooverwrites': False,
+                'nocheckcertificate': True, 
+                'cache_dir': False,
+                'legacy_server_connect': True, 
+                'retries': 5,                  # ลดจำนวน Retry ให้รู้ผลไวขึ้น
+                'fragment_retries': 5,
+                'socket_timeout': 15,          # ลด Timeout ลงหน่อย
+                'http_client': 'urllib',
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios', 'android', 'web'], # เพิ่ม web เข้าไป
+                    }
+                },
+                'youtube_include_dash_manifest': False,
             }
-            if fmt != 'video':
-                ydl_opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3' if fmt == 'audio' else 'wav',
-                    'preferredquality': '320',
-                }]
+                
+            task['logs'].append("🌐 [Direct Mode] Active.")
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(final_yt_url, download=True)
-                all_found = os.listdir(temp_dir)
-                if all_found:
-                    final_filename = max(all_found, key=lambda f: os.path.getsize(os.path.join(temp_dir, f)))
-                    shutil.move(os.path.join(temp_dir, final_filename), os.path.join(DOWNLOAD_FOLDER, final_filename))
-                    task['filename'] = final_filename
-                    task['download_url'] = f"/files/{final_filename}"
-                    task['status'] = 'completed'
-                else:
-                    raise Exception("All engines failed.")
+            if fmt == 'video':
+                res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
+                ydl_opts['format'] = f'bestvideo[height<={res}]+bestaudio/best'
+                ydl_opts['postprocessors'] = [{'key':'FFmpegMetadata'},{'key':'EmbedThumbnail'}]
+            else:
+                br = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
+                ext = 'mp3' if fmt == 'audio' else 'wav'
+                ydl_opts['format'] = 'bestaudio/best'
+                ydl_opts['postprocessors'] = [
+                    {'key':'FFmpegExtractAudio','preferredcodec':ext,'preferredquality':br},
+                    {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
+                ]
+
+                # --- ระบบดาวน์โหลด (Debug Mode) ---
+                abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
+                temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+                temp_dir = os.path.join(abs_download_path, temp_dir_name)
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                # ปิด Quiet เพื่อดู Log ใน Terminal
+                ydl_opts['quiet'] = False
+                ydl_opts['no_warnings'] = False
+                ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    task['logs'].append("Starting media engine... (Check terminal for details)")
+                    info = ydl.extract_info(url, download=True)
+                    
+                    entries = info.get('entries', [])
+                    all_found = os.listdir(temp_dir)
+                    task['logs'].append(f"Debug: Files in temp: {all_found}")
+
+                    if len(entries) > 1 or (not entries and 'playlist' in url):
+                        # กรณี Playlist
+                        title = info.get('title', 'Playlist')
+                        task['logs'].append(f"Zipping Playlist: {title}")
+                        zip_name = f"Playlist_{int(time.time())}"
+                        shutil.make_archive(os.path.join(abs_download_path, zip_name), 'zip', temp_dir)
+                        task['filename'] = f"{zip_name}.zip"
+                        task['download_url'] = f"/files/{zip_name}.zip"
+                    else:
+                        # กรณีไฟล์เดียว
+                        if all_found:
+                            # เลือกไฟล์ที่ขนาดใหญ่ที่สุด (มักจะเป็นไฟล์เพลงที่แปลงเสร็จแล้ว)
+                            final_filename = max(all_found, key=lambda f: os.path.getsize(os.path.join(temp_dir, f)))
+                            shutil.move(os.path.join(temp_dir, final_filename), os.path.join(abs_download_path, final_filename))
+                            task['filename'] = final_filename
+                            task['download_url'] = f"/files/{final_filename}"
+                            task['logs'].append(f"Success: {final_filename}")
+                        else:
+                            raise Exception(f"Processor finished but {temp_dir} is empty! Check Terminal.")
 
             task['logs'].append("Editing Media Tags...... Done")
             task['logs'].append("Sending File to User.....")
