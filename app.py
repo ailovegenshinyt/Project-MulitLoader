@@ -25,6 +25,126 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 tasks = {}
 
+
+
+def get_youtube_metadata(url):
+    try:
+        oembed_url = f"https://www.youtube.com/oembed?url={requests.utils.quote(url)}&format=json"
+        res = requests.get(oembed_url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            return {
+                'title': data.get('title'),
+                'artist': data.get('author_name'),
+                'album': 'YouTube',
+                'cover_url': data.get('thumbnail_url')
+            }
+    except Exception as e:
+        print(f"DEBUG: Failed to get YouTube oEmbed metadata: {e}")
+    
+    try:
+        video_id = None
+        if 'youtu.be/' in url:
+            video_id = url.split('youtu.be/')[1].split('?')[0].split('&')[0]
+        elif 'v=' in url:
+            video_id = url.split('v=')[1].split('&')[0].split('?')[0]
+            
+        if video_id:
+            return {
+                'title': None,
+                'artist': None,
+                'album': 'YouTube',
+                'cover_url': f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"
+            }
+    except:
+        pass
+    return None
+
+def embed_metadata(filepath, metadata):
+    if not metadata:
+        return
+        
+    title = metadata.get('title')
+    artist = metadata.get('artist')
+    album = metadata.get('album', '')
+    cover_url = metadata.get('cover_url')
+    
+    if not title and not artist:
+        return
+        
+    print(f"DEBUG: Embedding metadata into {filepath}: Title='{title}', Artist='{artist}', Album='{album}'")
+    
+    base, ext = os.path.splitext(filepath)
+    temp_out = base + "_tagged" + ext
+    cover_temp = None
+    
+    try:
+        if cover_url:
+            try:
+                cover_res = requests.get(cover_url, timeout=10)
+                if cover_res.status_code == 200:
+                    cover_temp = base + "_cover.jpg"
+                    with open(cover_temp, 'wb') as f:
+                        f.write(cover_res.content)
+            except Exception as e:
+                print(f"DEBUG: Failed to download cover art: {e}")
+                
+        cmd = ['ffmpeg', '-y', '-i', filepath]
+        
+        ext_lower = ext.lower()
+        if ext_lower == '.mp3':
+            if cover_temp:
+                cmd.extend(['-i', cover_temp, '-map', '0:a', '-map', '1:0', '-c:a', 'copy', '-c:v', 'mjpeg', '-id3v2_version', '3'])
+            else:
+                cmd.extend(['-c:a', 'copy'])
+            
+            if title: cmd.extend(['-metadata', f'title={title}'])
+            if artist: cmd.extend(['-metadata', f'artist={artist}'])
+            if album: cmd.extend(['-metadata', f'album={album}'])
+            
+        elif ext_lower == '.mp4':
+            if cover_temp:
+                cmd.extend(['-i', cover_temp, '-map', '0', '-map', '1', '-c', 'copy', '-disposition:v:1', 'attached_pic'])
+            else:
+                cmd.extend(['-c', 'copy'])
+                
+            if title: cmd.extend(['-metadata', f'title={title}'])
+            if artist: cmd.extend(['-metadata', f'artist={artist}'])
+            if album: cmd.extend(['-metadata', f'album={album}'])
+            
+        elif ext_lower == '.wav':
+            if cover_temp:
+                cmd.extend(['-i', cover_temp, '-map', '0:a', '-map', '1:0', '-c:a', 'copy', '-c:v', 'mjpeg', '-write_id3v2', '1'])
+            else:
+                cmd.extend(['-c:a', 'copy', '-write_id3v2', '1'])
+            if title: cmd.extend(['-metadata', f'title={title}'])
+            if artist: cmd.extend(['-metadata', f'artist={artist}'])
+            if album: cmd.extend(['-metadata', f'album={album}'])
+        else:
+            cmd.extend(['-c', 'copy'])
+            if title: cmd.extend(['-metadata', f'title={title}'])
+            if artist: cmd.extend(['-metadata', f'artist={artist}'])
+            if album: cmd.extend(['-metadata', f'album={album}'])
+            
+        cmd.append(temp_out)
+        
+        print(f"DEBUG: Running ffmpeg command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0:
+            shutil.move(temp_out, filepath)
+            print("DEBUG: Metadata embedded successfully.")
+        else:
+            print(f"DEBUG: ffmpeg metadata embedding failed with code {result.returncode}. Error: {result.stderr}")
+            if os.path.exists(temp_out):
+                os.remove(temp_out)
+    except Exception as e:
+        print(f"DEBUG: Error embedding metadata: {e}")
+        if os.path.exists(temp_out):
+            os.remove(temp_out)
+    finally:
+        if cover_temp and os.path.exists(cover_temp):
+            os.remove(cover_temp)
+
 # ── Background cleanup (ทุกๆ 5 นาที) ──────────────────────────────────────────
 def background_cleanup():
     while True:
@@ -67,6 +187,9 @@ def start_download():
             # แสดงผลใน Console ของเพื่อนด้วย
             print(f"--- Task {task_id} Started ---")
 
+            # Initialize metadata
+            task['metadata'] = {}
+
             # ── Spotify Identity Resolver (Direct Metadata API) ──────────────────────
             if 'spotify.com' in url:
                 task['logs'].append("Analysis Link....... Spotify (API Identity Mode)")
@@ -76,15 +199,27 @@ def start_download():
                 try:
                     # ดึง ID จากลิงก์
                     track_id = url.split('track/')[1].split('?')[0]
-                    # ใช้ API ของ SpotifyDown (ตัวแม่นที่สุด)
+                    # ใช้ API ของ SpotifyDown พร้อม Browser Headers เพื่อป้องกัน 403
                     api_url = f"https://api.spotifydown.com/metadata/track/{track_id}"
-                    
-                    res = requests.get(api_url, timeout=15)
+                    sp_headers = {
+                        "Origin": "https://spotifydown.com",
+                        "Referer": "https://spotifydown.com/",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    }
+                    res = requests.get(api_url, headers=sp_headers, timeout=15)
                     if res.status_code == 200:
                         data = res.json()
                         if data.get('success'):
                             title = data.get('title', 'Unknown')
-                            artist = data.get('artists', 'Unknown')
+                            artist = data.get('artists', data.get('artist', 'Unknown'))
+                            album = data.get('album', 'Unknown')
+                            cover_url = data.get('cover', data.get('cover_url', ''))
+                            task['metadata'] = {
+                                'title': title,
+                                'artist': artist,
+                                'album': album,
+                                'cover_url': cover_url
+                            }
                             search_query = f"{title} {artist}".strip()
                             task['logs'].append(f"Identified: {search_query}")
                         else:
@@ -98,7 +233,25 @@ def start_download():
                     try:
                         o_res = requests.get(f"https://open.spotify.com/oembed?url={url}", timeout=10)
                         if o_res.status_code == 200:
-                            search_query = o_res.json().get('title', '')
+                            o_data = o_res.json()
+                            raw_title = o_data.get('title', 'Unknown')
+                            thumbnail = o_data.get('thumbnail_url', '')
+                            author = o_data.get('author_name', '')
+                            # ตัว Spotify oEmbed title มักจะมาในรูปแบบ "Song - Artist"
+                            if ' - ' in raw_title:
+                                parts = raw_title.rsplit(' - ', 1)
+                                clean_title = parts[0].strip()
+                                clean_artist = parts[1].strip() if not author else author
+                            else:
+                                clean_title = raw_title
+                                clean_artist = author if author else 'Unknown Artist'
+                            task['metadata'] = {
+                                'title': clean_title,
+                                'artist': clean_artist,
+                                'album': 'Spotify',
+                                'cover_url': thumbnail
+                            }
+                            search_query = f"{clean_title} {clean_artist}".strip()
                     except: pass
                 
                 if not search_query:
@@ -107,6 +260,10 @@ def start_download():
                 # แปลงร่างเป็นคำค้นหา YouTube (ห้ามส่งลิงก์ Spotify ให้ yt-dlp เด็ดขาด!)
                 url = f"ytsearch1:{search_query}"
                 task['logs'].append(f"Redirecting to YouTube Engine: {search_query}")
+            elif 'youtube.com' in url or 'youtu.be' in url:
+                yt_meta = get_youtube_metadata(url)
+                if yt_meta:
+                    task['metadata'] = yt_meta
 
             # ── Core Download Engine (yt-dlp) ────────────────────────────────────────
             task['logs'].append("Warming up Core Engine...")
@@ -131,23 +288,27 @@ def start_download():
                 'nocheckcertificate': True, 
                 'cache_dir': False,
                 'legacy_server_connect': True, 
-                'retries': 5,                  # ลดจำนวน Retry ให้รู้ผลไวขึ้น
+                'retries': 5,
                 'fragment_retries': 5,
-                'socket_timeout': 15,          # ลด Timeout ลงหน่อย
-                'http_client': 'urllib',
+                'socket_timeout': 20,
+                # tv_embedded ไม่ต้องใช้ n challenge — เหมาะสำหรับ DASH โดยไม่ต้อง JS runtime
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['ios', 'android', 'web'], # เพิ่ม web เข้าไป
+                        'player_client': ['tv_embedded', 'ios', 'android', 'web'],
                     }
                 },
-                'youtube_include_dash_manifest': False,
+                'youtube_include_dash_manifest': True,
             }
                 
             task['logs'].append("🌐 [Direct Mode] Active.")
 
             if fmt == 'video':
                 res = {'4k':'2160','1080p':'1080','720p':'720','480p':'480'}.get(quality, '1080')
-                ydl_opts['format'] = f'bestvideo[height<={res}]+bestaudio/best'
+                # cascade: DASH สูง → DASH ใดก็ได้ → combined stream (format 18/22)
+                ydl_opts['format'] = f'bestvideo[height<={res}]+bestaudio/bestvideo+bestaudio/best[height<={res}]/best'
+                ydl_opts['merge_output_format'] = 'mp4'
+                # yt-dlp จัดการ metadata และ thumbnail ให้แล้ว ไม่ต้องรัน embed_metadata ซ้ำ
+                ydl_opts['writethumbnail'] = True
                 ydl_opts['postprocessors'] = [{'key':'FFmpegMetadata'},{'key':'EmbedThumbnail'}]
             else:
                 br = {'4k':'320','1080p':'256','720p':'192','480p':'128'}.get(quality, '320')
@@ -158,17 +319,18 @@ def start_download():
                     {'key':'FFmpegMetadata'}, {'key':'EmbedThumbnail'},
                 ]
 
-                # --- ระบบดาวน์โหลด (Debug Mode) ---
-                abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
-                temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-                temp_dir = os.path.join(abs_download_path, temp_dir_name)
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                # ปิด Quiet เพื่อดู Log ใน Terminal
-                ydl_opts['quiet'] = False
-                ydl_opts['no_warnings'] = False
-                ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
+            # --- ระบบดาวน์โหลด (Debug Mode) ---
+            abs_download_path = os.path.abspath(DOWNLOAD_FOLDER)
+            temp_dir_name = f"yt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            temp_dir = os.path.join(abs_download_path, temp_dir_name)
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # ปิด Quiet เพื่อดู Log ใน Terminal
+            ydl_opts['quiet'] = False
+            ydl_opts['no_warnings'] = False
+            ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
+            try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     task['logs'].append("Starting media engine... (Check terminal for details)")
                     info = ydl.extract_info(url, download=True)
@@ -196,6 +358,23 @@ def start_download():
                             task['logs'].append(f"Success: {final_filename}")
                         else:
                             raise Exception(f"Processor finished but {temp_dir} is empty! Check Terminal.")
+            except Exception as e:
+                print(f"DEBUG: Local engine failed: {e}")
+                raise
+
+            # Embed metadata — ข้าม video เพราะ yt-dlp จัดการ EmbedThumbnail ให้แล้ว
+            if fmt != 'video' and task.get('filename') and not task['filename'].endswith('.zip'):
+                filepath = os.path.join(abs_download_path, task['filename'])
+                if os.path.exists(filepath):
+                    task['logs'].append("Embedding Media Tags & Cover Art...")
+                    meta = task.get('metadata', {})
+                    if not meta.get('title'):
+                        clean_title = os.path.splitext(task['filename'])[0]
+                        clean_title = re.sub(r'\s*\[[a-zA-Z0-9_-]{11}\]$', '', clean_title)
+                        meta['title'] = clean_title
+                    if not meta.get('artist'):
+                        meta['artist'] = 'MultiLoader'
+                    embed_metadata(filepath, meta)
 
             task['logs'].append("Editing Media Tags...... Done")
             task['logs'].append("Sending File to User.....")

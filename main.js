@@ -69,7 +69,15 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             sse.addEventListener('error', e => {
-                if (sse.readyState !== EventSource.CLOSED) console.error('SSE error:', e);
+                if (e.data) {
+                    const errDiv = document.createElement('div');
+                    errDiv.style.cssText = 'color:#ff4a4a;font-weight:bold;';
+                    errDiv.textContent = `> ERROR: ${e.data}`;
+                    terminalBody.appendChild(errDiv);
+                    terminalBody.scrollTop = terminalBody.scrollHeight;
+                } else if (sse.readyState !== EventSource.CLOSED) {
+                    console.error('SSE connection error:', e);
+                }
                 clearInterval(interval);
                 sse.close();
                 downloadBtn.disabled    = false;
